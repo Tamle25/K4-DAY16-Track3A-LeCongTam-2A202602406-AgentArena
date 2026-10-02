@@ -79,16 +79,51 @@ class Critic(Middleware):
     name = "critic"
 
     def after_agent(self, ctx, report):
-        # TODO (§2): khoảng 10-25 dòng.
-        #  1. Lấy report["claims"]; nếu rỗng hoặc không phải list thì thôi.
-        #  2. Với mỗi claim: nếu claim["text"] có trong ctx.observed_text
-        #     -> giữ nguyên (KHÔNG sửa chữ).
-        #  3. Nếu không: thử tách câu ghép (trường hợp (c) ở docstring).
-        #     Tách được -> giữ cả hai nửa, mỗi nửa gắn doc_id của tài liệu
-        #     thật sự chứa nó, và đặt report["abstain"] = True.
-        #  4. Không tách được -> đây là bịa: bỏ claim đi.
-        #  5. Nếu không còn claim nào: report["abstain"] = True,
-        #     claims = [], citations = [], và viết lại "answer" nói rõ là
-        #     không đủ căn cứ.
-        #  6. Cập nhật report["citations"] cho khớp với claims còn lại.
-        return report  # <- mặc định KHÔNG LÀM GÌ: agent vẫn chạy được
+        claims = report.get("claims")
+        if not isinstance(claims, list):
+            return report
+
+        observed_text = getattr(ctx, "observed_text", "")
+        kept: list[dict] = []
+
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            text = claim.get("text", "")
+            if not text:
+                continue
+
+            if text in observed_text:
+                kept.append(claim)
+            else:
+                if " và " in text:
+                    p1, p2 = text.split(" và ", 1)
+                    if p1 in observed_text and p2 in observed_text and getattr(ctx, "corpus", None):
+                        docs1 = [
+                            d for d in ctx.corpus.docs
+                            if d.body and d.body in observed_text and any(p1 in l or p1.strip() in l.strip() for l in d.body.splitlines())
+                        ]
+                        docs2 = [
+                            d for d in ctx.corpus.docs
+                            if d.body and d.body in observed_text and any(p2 in l or p2.strip() in l.strip() for l in d.body.splitlines())
+                        ]
+                        pair = next(
+                            ((d1, d2) for d1 in docs1 for d2 in docs2 if d1.doc_id != d2.doc_id),
+                            None,
+                        )
+                        if pair:
+                            kept.append({"text": p1, "doc_id": pair[0].doc_id})
+                            kept.append({"text": p2, "doc_id": pair[1].doc_id})
+                            report["abstain"] = True
+                            continue
+
+        if not kept:
+            report["abstain"] = True
+            report["claims"] = []
+            report["citations"] = []
+            report["answer"] = "Không đủ căn cứ để kết luận."
+        else:
+            report["claims"] = kept
+            report["citations"] = sorted(list(set(c["doc_id"] for c in kept if isinstance(c, dict) and c.get("doc_id"))))
+
+        return report

@@ -532,6 +532,19 @@ class ReActAgent:
             ctx.messages.append({"role": "assistant", "content": text})
 
             if parsed.kind == "final":
+                # Real model protection: if model attempts to conclude without searching, nudge it to search first
+                if len(ctx.observations) == 0 and ctx.step < 3:
+                    if self._refused_final is None and isinstance(parsed.final, dict):
+                        self._refused_final = parsed.final
+                    nudge = (
+                        "QUY TẮC BẮT BUỘC: Bạn CHƯA gọi công cụ tìm kiếm nào. "
+                        "Bạn PHẢI gọi công cụ search ít nhất một lần để tra cứu tài liệu "
+                        "trước khi kết luận hoặc từ chối trả lời. "
+                        "Hãy phát ra ACTION để tìm kiếm thông tin ngay bây giờ."
+                    )
+                    ctx.messages.append({"role": "user", "content": nudge})
+                    continue
+
                 report = parsed.final if isinstance(parsed.final, dict) else {}
                 ctx.stop_reason = "final"
                 break
